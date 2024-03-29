@@ -1,21 +1,33 @@
-#[allow(unused_imports)]
-use std::env;
-#[allow(unused_imports)]
 use std::fs;
 
-fn main() {
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
-    println!("Logs from your program will appear here!");
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
 
-    // Uncomment this block to pass the first stage
-    // let args: Vec<String> = env::args().collect();
-    // if args[1] == "init" {
-    //     fs::create_dir(".git").unwrap();
-    //     fs::create_dir(".git/objects").unwrap();
-    //     fs::create_dir(".git/refs").unwrap();
-    //     fs::write(".git/HEAD", "ref: refs/heads/main\n").unwrap();
-    //     println!("Initialized git directory")
-    // } else {
-    //     println!("unknown command: {}", args[1])
-    // }
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Initialises a Git repository
+    Init,
+}
+
+fn main() -> Result<()> {
+    println!("Logs from your program will appear here!");
+    let cli = Cli::parse();
+
+    match &cli.command {
+        Commands::Init => {
+            fs::create_dir_all(".git/objects").context("creating the git objects directory")?;
+            fs::create_dir_all(".git/refs").context("creating the git refs directory")?;
+            fs::write(".git/HEAD", "ref: refs/heads/main\n").context("writing HEAD file")?;
+            println!("Initialized git directory");
+        }
+    }
+
+    Ok(())
 }

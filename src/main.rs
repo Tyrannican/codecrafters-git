@@ -30,7 +30,6 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
-    println!("Logs from your program will appear here!");
     let cli = Cli::parse();
 
     match &cli.command {
@@ -50,7 +49,7 @@ fn main() -> Result<()> {
                 anyhow::bail!("invalid git object");
             }
 
-            catfile::read_object(gobj, content);
+            catfile::read_object(gobj, content).context("cating file")?;
         }
     }
 

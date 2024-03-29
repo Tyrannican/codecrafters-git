@@ -1,19 +1,28 @@
 use std::fs;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
-#[derive(Parser)]
+mod commands;
+
+#[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum Commands {
     /// Initialises a Git repository
     Init,
+
+    CatFile {
+        #[arg(short)]
+        pretty_print: bool,
+
+        hash: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -26,6 +35,9 @@ fn main() -> Result<()> {
             fs::create_dir_all(".git/refs").context("creating the git refs directory")?;
             fs::write(".git/HEAD", "ref: refs/heads/main\n").context("writing HEAD file")?;
             println!("Initialized git directory");
+        }
+        Commands::CatFile { pretty_print, hash } => {
+            println!("Args: {pretty_print:?}");
         }
     }
 

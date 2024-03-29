@@ -1,9 +1,13 @@
 use std::fs;
 
 use anyhow::{Context, Result};
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 
 mod commands;
+mod object;
+
+use commands::catfile;
+use object::{parse_object, GitObject};
 
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
@@ -36,8 +40,17 @@ fn main() -> Result<()> {
             fs::write(".git/HEAD", "ref: refs/heads/main\n").context("writing HEAD file")?;
             println!("Initialized git directory");
         }
-        Commands::CatFile { pretty_print, hash } => {
-            println!("Args: {pretty_print:?}");
+        Commands::CatFile {
+            pretty_print: _,
+            hash,
+        } => {
+            anyhow::ensure!(hash.len() == 40);
+            let (gobj, content) = parse_object(hash).context("parsing git object")?;
+            if gobj == GitObject::Invalid {
+                anyhow::bail!("invalid git object");
+            }
+
+            catfile::read_object(gobj, content);
         }
     }
 

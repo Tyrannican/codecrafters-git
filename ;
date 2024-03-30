@@ -1,4 +1,4 @@
-use std::{fs, io::Write};
+use std::fs;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -6,7 +6,8 @@ use clap::{Parser, Subcommand};
 mod commands;
 mod object;
 
-use object::{GitObject, GitObjectType};
+use commands::catfile;
+use object::{parse_object, GitObject};
 
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
@@ -40,7 +41,7 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    match cli.command {
+    match &cli.command {
         Commands::Init => {
             fs::create_dir_all(".git/objects").context("creating the git objects directory")?;
             fs::create_dir_all(".git/refs").context("creating the git refs directory")?;
@@ -52,25 +53,17 @@ fn main() -> Result<()> {
             hash,
         } => {
             anyhow::ensure!(hash.len() == 40);
-            let object = GitObject::load(&hash).context("loading git object from hash")?;
-            match &object.obj_type {
-                GitObjectType::Blob => {
-                    let mut stdout = std::io::stdout();
-                    stdout
-                        .write_all(&object.content)
-                        .context("writing blob to stdout")?
-                }
-                _ => anyhow::bail!("we don't support the rest"),
+            let (gobj, content) = parse_object(hash).context("parsing git object")?;
+            if gobj == GitObject::Invalid {
+                anyhow::bail!("invalid git object");
             }
+
+            // TODO: Refactor
+            catfile::read_object(gobj, content).context("cating file")?;
         }
 
-        Commands::HashObject { write, file } => {
-            let object = GitObject::create(&file).context("creating git object")?;
-            if write {
-                object.write().context("writing git object")?;
-            }
-
-            println!("{}", object.hash);
+        Commands::HashObject { write: _, file } => {
+            let f = std::fs::File::open(file).context("opening file to compress")?;
         }
     }
 

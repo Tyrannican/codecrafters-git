@@ -1,1 +1,1 @@
-pub(crate) mod catfile;
+pub(crate) mod hashobject;

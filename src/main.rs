@@ -32,12 +32,16 @@ enum Commands {
         file: String,
     },
 
+    /// List the contents of a tree object
     LsTree {
         #[arg(long)]
         name_only: bool,
 
         tree_hash: String,
     },
+
+    /// Write the contents of the staging area to disk
+    WriteTree,
 }
 
 fn main() -> Result<()> {
@@ -58,6 +62,7 @@ fn main() -> Result<()> {
             name_only,
             tree_hash,
         } => commands::lstree::invoke(&tree_hash, name_only).context("lstree invocation")?,
+        Commands::WriteTree => commands::writetree::invoke().context("write tree invocation")?,
     }
 
     Ok(())

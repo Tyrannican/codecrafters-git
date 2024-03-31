@@ -16,7 +16,7 @@ pub(crate) struct GitObject {
 }
 
 impl GitObject {
-    pub(crate) fn load(hash: &str) -> Result<Self> {
+    pub(crate) fn load_blob(hash: &str) -> Result<Self> {
         anyhow::ensure!(hash.len() == 40);
         let path = create_filepath(hash)?;
         let f =
@@ -51,7 +51,7 @@ impl GitObject {
         })
     }
 
-    pub(crate) fn create(file: &str) -> Result<Self> {
+    pub(crate) fn create_blob(file: &str) -> Result<Self> {
         let metadata =
             std::fs::metadata(&file).with_context(|| format!("getting {file} metadata"))?;
         let size = metadata.size() as usize;
@@ -67,17 +67,16 @@ impl GitObject {
         let raw_hash = hasher.finalize();
         let hash = hex::encode(raw_hash);
 
-        let compressed = compress(&buffer[..]).context("attempting to compress data")?;
-
         Ok(Self {
             hash,
-            content: compressed,
+            content: buffer,
             obj_type: GitObjectType::Blob,
             size,
         })
     }
 
     pub(crate) fn write(&self) -> Result<()> {
+        let compressed = compress(&self.content[..]).context("attempting to compress data")?;
         let path = create_filepath(&self.hash)?;
         let mut f = if std::path::PathBuf::from(&path).exists() {
             std::fs::File::open(&path).with_context(|| format!("opening {path} to write object"))?
@@ -85,7 +84,7 @@ impl GitObject {
             std::fs::File::create(&path).context("creating file to write object")?
         };
 
-        f.write_all(&self.content).context("writing git object")?;
+        f.write_all(&compressed).context("writing git object")?;
 
         Ok(())
     }

@@ -52,7 +52,7 @@ fn main() -> Result<()> {
             hash,
         } => {
             anyhow::ensure!(hash.len() == 40);
-            let object = GitObject::load(&hash).context("loading git object from hash")?;
+            let object = GitObject::load_blob(&hash).context("loading git object from hash")?;
             match &object.obj_type {
                 GitObjectType::Blob => {
                     let mut stdout = std::io::stdout();
@@ -65,7 +65,7 @@ fn main() -> Result<()> {
         }
 
         Commands::HashObject { write, file } => {
-            let object = GitObject::create(&file).context("creating git object")?;
+            let object = GitObject::create_blob(&file).context("creating git object")?;
             if write {
                 object.write().context("writing git object")?;
             }

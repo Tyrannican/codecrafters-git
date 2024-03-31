@@ -16,7 +16,7 @@ pub(crate) struct GitObject {
 }
 
 impl GitObject {
-    pub(crate) fn load_blob(hash: &str) -> Result<Self> {
+    pub(crate) fn load(hash: &str) -> Result<Self> {
         anyhow::ensure!(hash.len() == 40);
         let path = create_filepath(hash)?;
         let f =

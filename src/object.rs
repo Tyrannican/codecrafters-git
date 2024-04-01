@@ -5,6 +5,7 @@ use sha1::{Digest, Sha1};
 use std::ffi::CStr;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::MetadataExt;
+use std::path::Path;
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -51,9 +52,9 @@ impl GitObject {
         })
     }
 
-    pub(crate) fn create_blob(file: &str) -> Result<Self> {
-        let metadata =
-            std::fs::metadata(&file).with_context(|| format!("getting {file} metadata"))?;
+    pub(crate) fn create_blob(file: impl AsRef<Path>) -> Result<Self> {
+        let metadata = std::fs::metadata(&file)
+            .with_context(|| format!("getting {} metadata", file.as_ref().display()))?;
         let size = metadata.size() as usize;
         let mut buffer = vec![];
         write!(buffer, "blob {size}\0").context("writing blob header")?;

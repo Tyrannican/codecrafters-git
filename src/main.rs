@@ -62,7 +62,7 @@ fn main() -> Result<()> {
             name_only,
             tree_hash,
         } => commands::lstree::invoke(&tree_hash, name_only).context("lstree invocation")?,
-        Commands::WriteTree => commands::writetree::invoke().context("write tree invocation")?,
+        Commands::WriteTree => commands::writetree::invoke(".").context("write tree invocation")?,
     }
 
     Ok(())

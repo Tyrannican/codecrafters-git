@@ -76,6 +76,20 @@ impl GitObject {
         })
     }
 
+    pub(crate) fn create_tree(path: impl AsRef<Path>) -> Result<Self> {
+        let tree_content = build_tree(path).context("constructing tree object")?;
+        let size = tree_content.len();
+        let raw = hash_content(&tree_content);
+        let hash = hex::encode(raw);
+
+        Ok(Self {
+            hash,
+            content: tree_content,
+            obj_type: GitObjectType::Tree,
+            size,
+        })
+    }
+
     pub(crate) fn write(&self) -> Result<()> {
         let compressed = compress(&self.content[..]).context("attempting to compress data")?;
         let path = create_filepath(&self.hash)?;
@@ -135,4 +149,44 @@ fn compress(content: impl Read) -> Result<Vec<u8>> {
         .context("compressing data")?;
 
     Ok(compressed)
+}
+
+fn hash_content(content: impl AsRef<Vec<u8>>) -> Vec<u8> {
+    let mut hasher = Sha1::new();
+    hasher.update(content.as_ref());
+    let raw = hasher.finalize();
+    let raw = Vec::from_iter(raw.into_iter());
+
+    raw
+}
+
+fn build_tree(path: impl AsRef<Path>) -> Result<Vec<u8>> {
+    let mut contents = vec![];
+
+    for entry in std::fs::read_dir(path.as_ref()).context("reading directory contents")? {
+        let entry = entry.context("converting to entry")?.path();
+        let filename = entry.file_name().expect("this should have a filename");
+        let filename = filename.to_str().expect("valid");
+
+        if entry.is_file() {
+            let obj = GitObject::create_blob(&entry).context("creating blob for tree")?;
+            let metadata = std::fs::metadata(&entry).context("getting file metadata")?;
+            let f_mode = metadata.mode();
+            let mode_string = format!("{f_mode:0>6o}");
+            let raw = hash_content(&obj.content);
+            write!(contents, "{mode_string} {filename}\0").context("writing blob to buffer")?;
+            contents.extend(raw);
+        } else {
+            let subtree = build_tree(&entry).context("recursive call to tree")?;
+            let raw = hash_content(&subtree);
+            write!(contents, "040000 {filename}\0").context("writing subtree metadata")?;
+            contents.extend(raw);
+        }
+    }
+
+    let mut tree = vec![];
+    write!(tree, "tree {}\0", contents.len()).context("writing tree metadata")?;
+    tree.extend(contents);
+
+    Ok(tree)
 }

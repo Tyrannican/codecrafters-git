@@ -53,6 +53,9 @@ enum Commands {
         #[arg(short)]
         message: String,
     },
+
+    /// Clones a repository to the target destination
+    Clone { url: String, dst: String },
 }
 
 fn main() -> Result<()> {
@@ -81,6 +84,10 @@ fn main() -> Result<()> {
             message,
         } => commands::committree::invoke(tree_hash, parent, message)
             .context("commit tree invocation")?,
+
+        Commands::Clone { url, dst } => {
+            commands::clone::invoke(url, dst).context("clone invocation")?
+        }
     }
 
     Ok(())

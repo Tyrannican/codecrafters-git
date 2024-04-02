@@ -1,11 +1,15 @@
+mod utils;
+
 use anyhow::{Context, Result};
-use flate2::read::{ZlibDecoder, ZlibEncoder};
+use flate2::read::ZlibDecoder;
 use sha1::{Digest, Sha1};
 
 use std::ffi::CStr;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
+
+use utils::{build_tree, compress, create_filepath, hash_content};
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -132,61 +136,4 @@ impl Into<String> for GitObjectType {
             Self::Commit => "commit".to_string(),
         }
     }
-}
-
-fn create_filepath(hash: &str) -> Result<String> {
-    std::fs::create_dir_all(format!(".git/objects/{}", &hash[..2]))
-        .context("creating dir for object")?;
-
-    Ok(format!(".git/objects/{}/{}", &hash[..2], &hash[2..]))
-}
-
-fn compress(content: impl Read) -> Result<Vec<u8>> {
-    let mut compressed = Vec::new();
-    let mut compressor = ZlibEncoder::new(content, flate2::Compression::default());
-    compressor
-        .read_to_end(&mut compressed)
-        .context("compressing data")?;
-
-    Ok(compressed)
-}
-
-fn hash_content(content: impl AsRef<Vec<u8>>) -> Vec<u8> {
-    let mut hasher = Sha1::new();
-    hasher.update(content.as_ref());
-    let raw = hasher.finalize();
-    let raw = Vec::from_iter(raw.into_iter());
-
-    raw
-}
-
-fn build_tree(path: impl AsRef<Path>) -> Result<Vec<u8>> {
-    let mut contents = vec![];
-
-    for entry in std::fs::read_dir(path.as_ref()).context("reading directory contents")? {
-        let entry = entry.context("converting to entry")?.path();
-        let filename = entry.file_name().expect("this should have a filename");
-        let filename = filename.to_str().expect("valid");
-
-        if entry.is_file() {
-            let obj = GitObject::create_blob(&entry).context("creating blob for tree")?;
-            let metadata = std::fs::metadata(&entry).context("getting file metadata")?;
-            let f_mode = metadata.mode();
-            let mode_string = format!("{f_mode:0>6o}");
-            let raw = hash_content(&obj.content);
-            write!(contents, "{mode_string} {filename}\0").context("writing blob to buffer")?;
-            contents.extend(raw);
-        } else {
-            let subtree = build_tree(&entry).context("recursive call to tree")?;
-            let raw = hash_content(&subtree);
-            write!(contents, "040000 {filename}\0").context("writing subtree metadata")?;
-            contents.extend(raw);
-        }
-    }
-
-    let mut tree = vec![];
-    write!(tree, "tree {}\0", contents.len()).context("writing tree metadata")?;
-    tree.extend(contents);
-
-    Ok(tree)
 }

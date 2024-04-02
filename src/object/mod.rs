@@ -94,6 +94,55 @@ impl GitObject {
         })
     }
 
+    pub(crate) fn create_commit(
+        tree_hash: String,
+        parent: Option<String>,
+        message: String,
+    ) -> Result<Self> {
+        use std::fmt::Write; // Prevents clash with io::Write i guess
+
+        let mut content = String::new();
+        writeln!(content, "tree {tree_hash}")?;
+
+        if let Some(parent) = parent {
+            writeln!(content, "parent {parent}")?;
+        }
+
+        // TODO: Deal with getting Author name and Email
+        let author = "Big Cheese";
+        let email = "cheddar@dairyfarm.com";
+        let time =
+            std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH)?;
+        writeln!(
+            content,
+            "author {author} <{email}> {} +0000",
+            time.as_secs()
+        )?;
+        writeln!(
+            content,
+            "committer {author} <{email}> {} +0000",
+            time.as_secs()
+        )?;
+        writeln!(content, "")?;
+        writeln!(content, "{message}")?;
+
+        let size = content.len();
+
+        let mut commit = String::new();
+        write!(commit, "commit {size}\0{content}")?;
+
+        let commit = commit.as_bytes().to_vec();
+        let raw = hash_content(&commit);
+        let hash = hex::encode(raw);
+
+        Ok(Self {
+            content: commit,
+            hash,
+            size,
+            obj_type: GitObjectType::Commit,
+        })
+    }
+
     pub(crate) fn write(&self) -> Result<()> {
         let compressed = compress(&self.content[..]).context("attempting to compress data")?;
         let path = create_filepath(&self.hash)?;

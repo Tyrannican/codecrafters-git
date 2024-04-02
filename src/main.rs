@@ -42,6 +42,17 @@ enum Commands {
 
     /// Write the contents of the staging area to disk
     WriteTree,
+
+    /// Creates a commit object
+    CommitTree {
+        tree_hash: String,
+
+        #[arg(short)]
+        parent: Option<String>,
+
+        #[arg(short)]
+        message: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -63,6 +74,13 @@ fn main() -> Result<()> {
             tree_hash,
         } => commands::lstree::invoke(&tree_hash, name_only).context("lstree invocation")?,
         Commands::WriteTree => commands::writetree::invoke(".").context("write tree invocation")?,
+
+        Commands::CommitTree {
+            tree_hash,
+            parent,
+            message,
+        } => commands::committree::invoke(tree_hash, parent, message)
+            .context("commit tree invocation")?,
     }
 
     Ok(())

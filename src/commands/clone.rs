@@ -1,17 +1,45 @@
+use std::collections::HashSet;
+
 use anyhow::{Context, Result};
 use reqwest::blocking::{Client, Response};
 use reqwest::StatusCode;
 
 pub(crate) fn invoke(url: String, _dst: String) -> Result<()> {
     let client = Client::new();
-    let _refs = ref_discovery(&url, &client).context("ref discovery")?;
+    let refs = ref_discovery(&url, &client).context("ref discovery")?;
+    println!("Refs: {refs:?}");
+    negotiation(&url, &client, refs).context("negotiation part")?;
 
     // TODO: Parse refs into PKT types
 
     Ok(())
 }
 
-fn ref_discovery(url: &str, client: &Client) -> Result<String> {
+fn negotiation(url: &str, client: &Client, refs: Vec<String>) -> Result<()> {
+    let url = format!("{url}/git-upload-pack");
+    let mut data = Vec::new();
+    data.push(0x0a);
+    for r in refs.into_iter() {
+        data.extend(format!("0032want {r}\n").as_bytes());
+    }
+
+    data.extend(b"0000");
+
+    println!("{}", String::from_utf8(data.clone())?);
+
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/x-git-upload-pack-request")
+        .body(data)
+        .send()
+        .context("sending negotiation")?;
+
+    println!("Response: {response:?}");
+
+    Ok(())
+}
+
+fn ref_discovery(url: &str, client: &Client) -> Result<Vec<String>> {
     println!("Performing ref discovery for {url}");
     let url = format!("{url}/info/refs");
     let response = client
@@ -20,9 +48,10 @@ fn ref_discovery(url: &str, client: &Client) -> Result<String> {
         .send()
         .context("initiating ref discovery")?;
 
-    let response = validate_ref_discovery(response).context("ref discovery validation")?;
+    let ref_string = validate_ref_discovery(response).context("ref discovery validation")?;
+    let refs = build_ref_request_list(ref_string);
 
-    Ok(response)
+    Ok(refs)
 }
 
 fn validate_ref_discovery(response: Response) -> Result<String> {
@@ -45,4 +74,29 @@ fn validate_ref_discovery(response: Response) -> Result<String> {
     }
 
     Ok(text)
+}
+
+fn build_ref_request_list(ref_string: String) -> Vec<String> {
+    let refs = ref_string
+        .split('\n')
+        .filter_map(|mut r| {
+            if r.starts_with("0000") {
+                r = &r[4..];
+            }
+
+            let Some((sha, _)) = r.split_once(' ') else {
+                return None;
+            };
+
+            if r.is_empty() {
+                return None;
+            }
+
+            Some(sha.to_owned())
+        })
+        .collect::<Vec<String>>();
+
+    let refs = &refs[1..refs.len() - 1];
+
+    refs.to_vec()
 }

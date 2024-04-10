@@ -58,7 +58,8 @@ enum Commands {
     Clone { url: String, dst: String },
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -86,7 +87,9 @@ fn main() -> Result<()> {
             .context("commit tree invocation")?,
 
         Commands::Clone { url, dst } => {
-            commands::clone::invoke(url, dst).context("clone invocation")?
+            commands::clone::invoke(url, dst)
+                .await
+                .context("clone invocation")?;
         }
     }
 

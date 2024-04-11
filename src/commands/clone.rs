@@ -3,52 +3,34 @@ use reqwest::Client;
 use reqwest::StatusCode;
 use std::collections::HashSet;
 use std::fmt::Write;
-use tokio::io::AsyncRead;
-use tokio::io::BufReader;
+use std::path::PathBuf;
 
-pub(crate) async fn invoke(url: String, _dst: String) -> Result<()> {
+use crate::pack::PackFile;
+
+pub(crate) async fn invoke(url: String, dst: String) -> Result<()> {
     let client = Client::new();
+    let path = PathBuf::from(dst);
+    tokio::fs::create_dir_all(path.join(".git")).await?;
+    std::env::set_current_dir(path.join(".git"))?;
     let advertised = ref_discovery(&url, &client)
         .await
         .context("ref discovery")?;
-    negotiation(&url, advertised, &client).await?;
+    let packs = negotiation(&url, advertised, &client).await?;
+    for mut pack in packs {
+        pack.parse()?;
+    }
 
     Ok(())
-}
-
-fn parse_packfile(pack: &[u8]) -> Result<()> {
-    let mut reader = BufReader::new(pack);
-    let total_objects = validate_header(&mut reader).context("validating packfile header")?;
-
-    Ok(())
-}
-
-fn validate_header(reader: &mut BufReader<&[u8]>) -> Result<u32> {
-    // TODO: Tokio-ify this
-    //
-    let mut check = [0; 4];
-    //reader
-    //    .read_exact(&mut check)
-    //    .context("reading the packfile signature")?;
-    //anyhow::ensure!(&check == b"PACK");
-    //reader
-    //    .read_exact(&mut check)
-    //    .context("reading the packfile version")?;
-    //anyhow::ensure!(u32::from_be_bytes(check) == 2);
-    //reader
-    //    .read_exact(&mut check)
-    //    .context("reading the total objects in the pack")?;
-    let total_objects = u32::from_be_bytes(check);
-
-    Ok(total_objects)
 }
 
 // This is clone so we have nothing so omitting the have part
-async fn negotiation(url: &str, advertised: Vec<String>, client: &Client) -> Result<()> {
+async fn negotiation(url: &str, advertised: Vec<String>, client: &Client) -> Result<Vec<PackFile>> {
     let url = format!("{url}/git-upload-pack");
     let want: HashSet<String> = advertised.into_iter().collect();
 
+    let mut packs = Vec::new();
     for reference in want.iter() {
+        println!("Parsing pack: {reference}");
         let mut data = String::new();
         let line = format!("want {}\n", reference);
         let size = (line.len() as u16 + 4).to_be_bytes();
@@ -58,7 +40,7 @@ async fn negotiation(url: &str, advertised: Vec<String>, client: &Client) -> Res
         writeln!(data, "0009done")?;
 
         let body = data.as_bytes().to_owned();
-        let packfile = client
+        let mut packfile = client
             .post(&url)
             .header("Content-Type", "x-git-upload-pack-request")
             .body(body)
@@ -68,11 +50,12 @@ async fn negotiation(url: &str, advertised: Vec<String>, client: &Client) -> Res
             .bytes()
             .await?;
 
-        parse_packfile(&packfile[8..]).context("packfile parsing")?;
+        let _ = packfile.split_to(8);
+        packs.push(PackFile::new(packfile));
         break;
     }
 
-    Ok(())
+    Ok(packs)
 }
 
 async fn ref_discovery(url: &str, client: &Client) -> Result<Vec<String>> {

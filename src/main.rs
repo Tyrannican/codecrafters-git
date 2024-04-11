@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 
 mod commands;
 mod object;
+mod pack;
 
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]

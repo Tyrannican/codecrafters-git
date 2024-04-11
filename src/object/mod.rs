@@ -156,6 +156,20 @@ impl GitObject {
 
         Ok(())
     }
+
+    pub(crate) fn create_raw(data: &[u8], obj: GitObjectType) -> Result<Self> {
+        let mut content = vec![];
+        write!(content, "{} {}\0", obj, data.len())?;
+        content.extend(data);
+        let hash = hex::encode(hash_content(&content));
+
+        Ok(Self {
+            content,
+            size: data.len(),
+            hash,
+            obj_type: obj,
+        })
+    }
 }
 
 #[derive(Default, Debug, PartialEq, Eq, Copy, Clone)]
@@ -183,6 +197,16 @@ impl Into<String> for GitObjectType {
             Self::Blob => "blob".to_string(),
             Self::Tree => "tree".to_string(),
             Self::Commit => "commit".to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for GitObjectType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::Blob => write!(f, "blob"),
+            Self::Tree => write!(f, "tree"),
+            Self::Commit => write!(f, "commit"),
         }
     }
 }

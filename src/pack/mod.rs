@@ -1,4 +1,4 @@
-use std::{fmt::write, io::Read};
+use std::io::Read;
 
 use anyhow::{Context, Result};
 use bytes::Buf;
@@ -69,13 +69,14 @@ impl PackFile {
 
     pub fn parse(&mut self) -> Result<()> {
         self.validate_header().context("validating pack header")?;
-        for _ in 0..self.total_objects {
-            let mut header = Vec::with_capacity(8);
+        for it in 0..self.total_objects {
+            println!("Iteration {it}");
+            let mut header = Vec::with_capacity(4);
             loop {
                 let next = self.data.get_u8();
                 header.push(next);
 
-                if next & 0b1000_000 == 0 {
+                if next & 0b1000_0000 == 0 {
                     break;
                 }
             }
@@ -87,6 +88,10 @@ impl PackFile {
                 object_size |= ((b & 0b0111_1111) as u64) << (7 * i + 4);
             }
 
+            println!("Object size: {object_size}");
+            println!("Object type: {obj_type:?}");
+
+            // TODO: Fix some offset magic in deltas
             match obj_type {
                 PackFileObjectType::OffsetDelta => unimplemented!("nyi"),
                 PackFileObjectType::ReferenceDelta => {
@@ -98,6 +103,8 @@ impl PackFile {
                     decoder
                         .read_to_end(&mut data)
                         .context("decompressing ref delta")?;
+
+                    anyhow::ensure!(decoder.total_out() == object_size);
 
                     self.data.advance(decoder.total_in() as usize);
 
@@ -113,23 +120,25 @@ impl PackFile {
                     // obj.write()?;
                 }
                 _ => {
-                    let mut data = Vec::new();
+                    let mut content = Vec::new();
                     let mut decoder = flate2::read::ZlibDecoder::new(&self.data[..]);
                     decoder
-                        .read_to_end(&mut data)
+                        .read_to_end(&mut content)
                         .context("decompressing object")?;
 
+                    anyhow::ensure!(decoder.total_out() == object_size);
+                    self.data.advance(decoder.total_in() as usize);
                     match obj_type {
                         PackFileObjectType::Commit => {
-                            let obj = GitObject::create_raw(&data, GitObjectType::Commit)?;
+                            let obj = GitObject::create_raw(&content, GitObjectType::Commit)?;
                             // obj.write()?
                         }
                         PackFileObjectType::Blob => {
-                            let obj = GitObject::create_raw(&data, GitObjectType::Blob)?;
+                            let obj = GitObject::create_raw(&content, GitObjectType::Blob)?;
                             // obj.write()?
                         }
                         PackFileObjectType::Tree => {
-                            let obj = GitObject::create_raw(&data, GitObjectType::Tree)?;
+                            let obj = GitObject::create_raw(&content, GitObjectType::Tree)?;
                             // obj.write()?
                         }
                         _ => unimplemented!(),
@@ -143,7 +152,13 @@ impl PackFile {
 
     fn validate_header(&mut self) -> Result<()> {
         let sig = self.data.split_to(4);
-        anyhow::ensure!(&sig.to_vec() == b"PACK");
+        anyhow::ensure!(
+            &sig.to_vec() == b"PACK",
+            format!(
+                "failed signature - got {} instead",
+                String::from_utf8(sig.to_vec())?
+            )
+        );
         let version = self.data.split_to(4);
         anyhow::ensure!(u32::from_be_bytes([version[0], version[1], version[2], version[3]]) == 2);
         let total_objects = self.data.split_to(4);

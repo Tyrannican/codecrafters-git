@@ -57,7 +57,6 @@ pub(crate) struct PackFileObject {
 pub(crate) struct PackFile {
     pub(crate) data: bytes::Bytes,
     pub(crate) total_objects: u32,
-    pub(crate) objects: Vec<PackFileObject>,
 }
 
 impl PackFile {
@@ -65,13 +64,11 @@ impl PackFile {
         Self {
             data,
             total_objects: 0,
-            objects: vec![],
         }
     }
 
     pub fn parse(&mut self) -> Result<()> {
         self.validate_header().context("validating pack header")?;
-        let mut packfile = PackFile::default();
         for _ in 0..self.total_objects {
             let mut header = Vec::with_capacity(8);
             loop {
@@ -83,10 +80,11 @@ impl PackFile {
                 }
             }
 
-            let obj_type = PackFileObjectType::from((header[0] & 0b0111_000) >> 4);
-            let mut _length = (header[0] & 0b0000_1111) as u64;
-            for (idx, byte) in header[1..].iter().enumerate() {
-                _length |= ((byte & 0b0111_111) as u64) << (7 * idx + 4);
+            let obj_type = PackFileObjectType::from((header[0] & 0b0111_0000) >> 4);
+            let mut object_size = (header[0] & 0b0000_1111) as u64;
+
+            for (i, b) in header[1..].iter().enumerate() {
+                object_size |= ((b & 0b0111_1111) as u64) << (7 * i + 4);
             }
 
             match obj_type {

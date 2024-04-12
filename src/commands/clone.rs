@@ -3,19 +3,22 @@ use reqwest::Client;
 use reqwest::StatusCode;
 use std::collections::HashSet;
 use std::fmt::Write;
-use std::path::PathBuf;
+use std::path::Path;
 
 use crate::pack::PackFile;
 
-pub(crate) async fn invoke(url: String, dst: String) -> Result<()> {
+pub(crate) async fn invoke(url: String, dst: Option<String>) -> Result<()> {
+    if let Some(dst) = dst {
+        create_destination(dst)
+            .await
+            .context("creating clone destination")?;
+    }
+
     let client = Client::new();
-    let path = PathBuf::from(dst);
-    tokio::fs::create_dir_all(path.join(".git")).await?;
-    std::env::set_current_dir(path.join(".git"))?;
     let advertised = ref_discovery(&url, &client)
         .await
         .context("ref discovery")?;
-    let packs = negotiation(&url, advertised, &client).await?;
+    let packs = fetch_refs(&url, advertised, &client).await?;
     for mut pack in packs {
         pack.parse()?;
     }
@@ -23,8 +26,19 @@ pub(crate) async fn invoke(url: String, dst: String) -> Result<()> {
     Ok(())
 }
 
+async fn create_destination(dst: impl AsRef<Path>) -> Result<()> {
+    if dst.as_ref().exists() {
+        tokio::fs::remove_dir_all(&dst).await?;
+    }
+    tokio::fs::create_dir_all(&dst).await?;
+    std::env::set_current_dir(dst)?;
+    crate::commands::init::invoke()?;
+
+    Ok(())
+}
+
 // This is clone so we have nothing so omitting the have part
-async fn negotiation(url: &str, advertised: Vec<String>, client: &Client) -> Result<Vec<PackFile>> {
+async fn fetch_refs(url: &str, advertised: Vec<String>, client: &Client) -> Result<Vec<PackFile>> {
     let url = format!("{url}/git-upload-pack");
     let want: HashSet<String> = advertised.into_iter().collect();
 

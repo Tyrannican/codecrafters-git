@@ -31,19 +31,8 @@ impl From<u8> for PackFileObjectType {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DeltaInstruction {
-    Copy { offset: u64, size: u64 },
-    Insert { data: bytes::Bytes },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CopyField {
-    Offset1,
-    Offset2,
-    Offset3,
-    Offset4,
-    Size1,
-    Size2,
-    Size3,
+    Copy { offset: usize, size: usize },
+    Data { data: bytes::Bytes },
 }
 
 #[allow(dead_code)]
@@ -69,8 +58,7 @@ impl PackFile {
 
     pub fn parse(&mut self) -> Result<()> {
         self.validate_header().context("validating pack header")?;
-        for it in 0..self.total_objects {
-            println!("Iteration {it}");
+        while !self.data.is_empty() {
             let mut header = Vec::with_capacity(4);
             loop {
                 let next = self.data.get_u8();
@@ -91,25 +79,25 @@ impl PackFile {
             println!("Object size: {object_size}");
             println!("Object type: {obj_type:?}");
 
-            // TODO: Fix some offset magic in deltas
             match obj_type {
                 PackFileObjectType::OffsetDelta => unimplemented!("nyi"),
                 PackFileObjectType::ReferenceDelta => {
                     let base_name = self.data.split_to(20);
                     let hash = hex::encode(base_name);
 
-                    let mut data = Vec::new();
+                    let mut delta = Vec::new();
                     let mut decoder = flate2::read::ZlibDecoder::new(&self.data[..]);
                     decoder
-                        .read_to_end(&mut data)
+                        .read_to_end(&mut delta)
                         .context("decompressing ref delta")?;
 
                     anyhow::ensure!(decoder.total_out() == object_size);
-
                     self.data.advance(decoder.total_in() as usize);
 
-                    let mut data = bytes::Bytes::from(data);
-                    let instructions = parse_delta(&mut data)?;
+                    let mut delta = bytes::Bytes::from(delta);
+                    let _base_object_size = parse_delta_size(&mut delta)?;
+                    let _reconstructed_size = parse_delta_size(&mut delta)?;
+                    let instructions = parse_delta(&mut delta)?;
 
                     let obj = GitObject::load(&hash)?;
                     let mut data = Vec::new();
@@ -117,7 +105,7 @@ impl PackFile {
                     let content = apply_deltas(&data, instructions)?;
 
                     let obj = GitObject::create_raw(&content, obj.obj_type)?;
-                    // obj.write()?;
+                    obj.write()?;
                 }
                 _ => {
                     let mut content = Vec::new();
@@ -131,20 +119,22 @@ impl PackFile {
                     match obj_type {
                         PackFileObjectType::Commit => {
                             let obj = GitObject::create_raw(&content, GitObjectType::Commit)?;
-                            // obj.write()?
+                            obj.write()?
                         }
                         PackFileObjectType::Blob => {
                             let obj = GitObject::create_raw(&content, GitObjectType::Blob)?;
-                            // obj.write()?
+                            obj.write()?
                         }
                         PackFileObjectType::Tree => {
                             let obj = GitObject::create_raw(&content, GitObjectType::Tree)?;
-                            // obj.write()?
+                            obj.write()?
                         }
                         _ => unimplemented!(),
                     }
                 }
             }
+
+            println!();
         }
 
         Ok(())
@@ -175,66 +165,82 @@ impl PackFile {
     }
 }
 
+fn parse_delta_size(data: &mut bytes::Bytes) -> Result<u64> {
+    let mut size = 0;
+    for i in 0.. {
+        let byte = data.get_u8();
+        size |= ((byte & 0b0111_1111) as u64) << (7 * i);
+        if byte & 0b1000_0000 == 0 {
+            break;
+        }
+    }
+
+    Ok(size)
+}
+
 fn parse_delta(data: &mut bytes::Bytes) -> Result<Vec<DeltaInstruction>> {
     let mut instructions = Vec::new();
 
     while !data.is_empty() {
         let initial = data.get_u8();
-        anyhow::ensure!(initial != 0, "expansion value");
+        anyhow::ensure!(initial != 0, "0 instruction is reserved");
+        println!("Lead: {initial} - {initial:08b}");
+
+        let mut size: usize = 0;
+        let mut offset: usize = 0;
 
         if initial & 0b1000_0000 == 0 {
-            let size = initial;
-            let add = data.split_to(size as usize);
-
-            instructions.push(DeltaInstruction::Insert { data: add });
+            // Data instruction
+            println!(
+                "Insert -- Inserting {initial} bytes, got {} left",
+                data.len()
+            );
+            instructions.push(DeltaInstruction::Data {
+                data: data.split_to(initial as usize),
+            });
         } else {
-            let mut fields = vec![];
-            if initial & 0b0000_0001 != 0 {
-                fields.push(CopyField::Offset1);
-            }
-            if initial & 0b0000_0010 != 0 {
-                fields.push(CopyField::Offset2);
-            }
-            if initial & 0b0000_0100 != 0 {
-                fields.push(CopyField::Offset3);
-            }
-            if initial & 0b0000_1000 != 0 {
-                fields.push(CopyField::Offset4);
-            }
-            if initial & 0b0001_0000 != 0 {
-                fields.push(CopyField::Size1);
-            }
-            if initial & 0b0010_0000 != 0 {
-                fields.push(CopyField::Size2);
-            }
-            if initial & 0b0100_0000 != 0 {
-                fields.push(CopyField::Size3);
-            }
-
-            let mut offset = 0;
-            let mut size = 0;
-
-            for field in fields.iter() {
+            // Copy Instruction
+            if initial & 1 == 1 {
                 let byte = data.get_u8();
-
-                match field {
-                    CopyField::Offset1 => offset |= byte as u64,
-                    CopyField::Offset2 => offset |= (byte as u64) << 8,
-                    CopyField::Offset3 => offset |= (byte as u64) << 16,
-                    CopyField::Offset4 => offset |= (byte as u64) << 24,
-                    CopyField::Size1 => size |= byte as u64,
-                    CopyField::Size2 => size |= (byte as u64) << 8,
-                    CopyField::Size3 => size |= (byte as u64) << 16,
-                }
+                offset |= byte as usize;
+            }
+            if (initial >> 1) & 1 == 1 {
+                let byte = data.get_u8();
+                offset |= (byte as usize) << 8;
+            }
+            if (initial >> 2) & 1 == 1 {
+                let byte = data.get_u8();
+                offset |= (byte as usize) << 16;
+            }
+            if (initial >> 3) & 1 == 1 {
+                let byte = data.get_u8();
+                offset |= (byte as usize) << 24;
+            }
+            if (initial >> 4) & 1 == 1 {
+                let byte = data.get_u8();
+                size |= byte as usize;
+            }
+            if (initial >> 5) & 1 == 1 {
+                let byte = data.get_u8();
+                size |= (byte as usize) << 8;
+            }
+            if (initial & 6) == 1 {
+                let byte = data.get_u8();
+                size |= (byte as usize) << 16;
             }
 
             if size == 0 {
                 size = 0x10000;
             }
 
-            instructions.push(DeltaInstruction::Copy { offset, size })
+            println!("Copy -- Size: {size} Offset: {offset}");
+            instructions.push(DeltaInstruction::Copy { offset, size });
         }
     }
+    for instruction in &instructions {
+        println!("{instruction:?}");
+    }
+    println!();
 
     Ok(instructions)
 }
@@ -244,9 +250,11 @@ fn apply_deltas(base: &[u8], instructions: Vec<DeltaInstruction>) -> Result<Vec<
     for instruction in instructions.into_iter() {
         match instruction {
             DeltaInstruction::Copy { offset, size } => {
+                dbg!(base.len());
+                dbg!(offset, size);
                 result.extend_from_slice(&base[offset as usize..offset as usize + size as usize])
             }
-            DeltaInstruction::Insert { data } => {
+            DeltaInstruction::Data { data } => {
                 result.extend_from_slice(&data);
             }
         }

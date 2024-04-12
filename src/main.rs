@@ -56,7 +56,7 @@ enum Commands {
     },
 
     /// Clones a repository to the target destination
-    Clone { url: String, dst: String },
+    Clone { url: String, dst: Option<String> },
 }
 
 #[tokio::main]

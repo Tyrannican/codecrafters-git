@@ -143,20 +143,6 @@ impl GitObject {
         })
     }
 
-    pub(crate) fn write(&self) -> Result<()> {
-        let compressed = compress(&self.content[..]).context("attempting to compress data")?;
-        let path = create_filepath(&self.hash)?;
-        let mut f = if std::path::PathBuf::from(&path).exists() {
-            std::fs::File::open(&path).with_context(|| format!("opening {path} to write object"))?
-        } else {
-            std::fs::File::create(&path).context("creating file to write object")?
-        };
-
-        f.write_all(&compressed).context("writing git object")?;
-
-        Ok(())
-    }
-
     pub(crate) fn create_raw(data: &[u8], obj: GitObjectType) -> Result<Self> {
         let mut content = vec![];
         write!(content, "{} {}\0", obj, data.len())?;
@@ -169,6 +155,20 @@ impl GitObject {
             hash,
             obj_type: obj,
         })
+    }
+
+    pub(crate) fn write(&self) -> Result<()> {
+        let compressed = compress(&self.content[..]).context("attempting to compress data")?;
+        let path = create_filepath(&self.hash)?;
+        let mut f = if std::path::PathBuf::from(&path).exists() {
+            std::fs::File::open(&path).with_context(|| format!("opening {path} to write object"))?
+        } else {
+            std::fs::File::create(&path).context("creating file to write object")?
+        };
+
+        f.write_all(&compressed).context("writing git object")?;
+
+        Ok(())
     }
 }
 

@@ -66,7 +66,6 @@ async fn fetch_refs(url: &str, advertised: Vec<String>, client: &Client) -> Resu
 
         let _ = packfile.split_to(8);
         packs.push(PackFile::new(packfile));
-        break;
     }
 
     Ok(packs)

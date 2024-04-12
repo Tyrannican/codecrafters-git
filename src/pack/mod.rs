@@ -1,7 +1,7 @@
-use std::io::Read;
+use std::io::{Cursor, Read};
 
 use anyhow::{Context, Result};
-use bytes::Buf;
+use bytes::{Buf, Bytes};
 
 use crate::object::{GitObject, GitObjectType};
 
@@ -32,7 +32,7 @@ impl From<u8> for PackFileObjectType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DeltaInstruction {
     Copy { offset: usize, size: usize },
-    Data { data: bytes::Bytes },
+    Data { data: Bytes },
 }
 
 #[allow(dead_code)]
@@ -44,12 +44,13 @@ pub(crate) struct PackFileObject {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PackFile {
-    pub(crate) data: bytes::Bytes,
+    pub(crate) data: Bytes,
     pub(crate) total_objects: u32,
 }
 
+// TODO: Look at using Cursor to determine the offset magic
 impl PackFile {
-    pub fn new(data: bytes::Bytes) -> Self {
+    pub fn new(data: Bytes) -> Self {
         Self {
             data,
             total_objects: 0,
@@ -58,6 +59,7 @@ impl PackFile {
 
     pub fn parse(&mut self) -> Result<()> {
         self.validate_header().context("validating pack header")?;
+
         while !self.data.is_empty() {
             let mut header = Vec::with_capacity(4);
             loop {
@@ -76,65 +78,13 @@ impl PackFile {
                 object_size |= ((b & 0b0111_1111) as u64) << (7 * i + 4);
             }
 
-            println!("Object size: {object_size}");
-            println!("Object type: {obj_type:?}");
-
             match obj_type {
-                PackFileObjectType::OffsetDelta => unimplemented!("nyi"),
+                PackFileObjectType::OffsetDelta => self.ofs_delta().context("ofs delta parse")?,
                 PackFileObjectType::ReferenceDelta => {
-                    let base_name = self.data.split_to(20);
-                    let hash = hex::encode(base_name);
-
-                    let mut delta = Vec::new();
-                    let mut decoder = flate2::read::ZlibDecoder::new(&self.data[..]);
-                    decoder
-                        .read_to_end(&mut delta)
-                        .context("decompressing ref delta")?;
-
-                    anyhow::ensure!(decoder.total_out() == object_size);
-                    self.data.advance(decoder.total_in() as usize);
-
-                    let mut delta = bytes::Bytes::from(delta);
-                    let _base_object_size = parse_delta_size(&mut delta)?;
-                    let _reconstructed_size = parse_delta_size(&mut delta)?;
-                    let instructions = parse_delta(&mut delta)?;
-
-                    let obj = GitObject::load(&hash)?;
-                    let mut data = Vec::new();
-                    obj.content.reader().read_to_end(&mut data)?;
-                    let content = apply_deltas(&data, instructions)?;
-
-                    let obj = GitObject::create_raw(&content, obj.obj_type)?;
-                    obj.write()?;
+                    self.ref_delta(object_size).context("ref delta parse")?
                 }
-                _ => {
-                    let mut content = Vec::new();
-                    let mut decoder = flate2::read::ZlibDecoder::new(&self.data[..]);
-                    decoder
-                        .read_to_end(&mut content)
-                        .context("decompressing object")?;
-
-                    anyhow::ensure!(decoder.total_out() == object_size);
-                    self.data.advance(decoder.total_in() as usize);
-                    match obj_type {
-                        PackFileObjectType::Commit => {
-                            let obj = GitObject::create_raw(&content, GitObjectType::Commit)?;
-                            obj.write()?
-                        }
-                        PackFileObjectType::Blob => {
-                            let obj = GitObject::create_raw(&content, GitObjectType::Blob)?;
-                            obj.write()?
-                        }
-                        PackFileObjectType::Tree => {
-                            let obj = GitObject::create_raw(&content, GitObjectType::Tree)?;
-                            obj.write()?
-                        }
-                        _ => unimplemented!(),
-                    }
-                }
+                _ => self.object(obj_type, object_size).context("object parse")?,
             }
-
-            println!();
         }
 
         Ok(())
@@ -163,6 +113,85 @@ impl PackFile {
 
         Ok(())
     }
+
+    fn ofs_delta(&mut self) -> Result<()> {
+        todo!();
+        //let ofs = self.get_ofs_delta_offset()?;
+        //let Some(base_ofs) = ofs.checked_sub(ofs) else {
+        //    anyhow::bail!("invalid offset delta offset");
+        //};
+
+        Ok(())
+    }
+
+    fn ref_delta(&mut self, object_size: u64) -> Result<()> {
+        let base_name = self.data.split_to(20);
+        let hash = hex::encode(base_name);
+
+        let mut delta = Vec::new();
+        let mut decoder = flate2::read::ZlibDecoder::new(&self.data[..]);
+        decoder
+            .read_to_end(&mut delta)
+            .context("decompressing ref delta")?;
+
+        anyhow::ensure!(decoder.total_out() == object_size);
+        self.data.advance(decoder.total_in() as usize);
+
+        let mut delta = bytes::Bytes::from(delta);
+        let _base_object_size = parse_delta_size(&mut delta)?;
+        let _reconstructed_size = parse_delta_size(&mut delta)?;
+        let instructions = parse_delta(&mut delta)?;
+
+        let obj = GitObject::load(&hash)?;
+        let mut data = Vec::new();
+        obj.content.reader().read_to_end(&mut data)?;
+        let content = apply_deltas(&data, instructions)?;
+
+        let obj = GitObject::create_raw(&content, obj.obj_type)?;
+        obj.write()?;
+
+        Ok(())
+    }
+
+    fn object(&mut self, object_type: PackFileObjectType, object_size: u64) -> Result<()> {
+        let mut content = Vec::new();
+        let mut decoder = flate2::read::ZlibDecoder::new(&self.data[..]);
+        decoder
+            .read_to_end(&mut content)
+            .context("decompressing object")?;
+
+        anyhow::ensure!(decoder.total_out() == object_size);
+        self.data.advance(decoder.total_in() as usize);
+        match object_type {
+            PackFileObjectType::Commit => {
+                let obj = GitObject::create_raw(&content, GitObjectType::Commit)?;
+                obj.write()?
+            }
+            PackFileObjectType::Blob => {
+                let obj = GitObject::create_raw(&content, GitObjectType::Blob)?;
+                obj.write()?
+            }
+            PackFileObjectType::Tree => {
+                let obj = GitObject::create_raw(&content, GitObjectType::Tree)?;
+                obj.write()?
+            }
+            _ => unimplemented!(),
+        }
+        Ok(())
+    }
+
+    fn get_ofs_delta_offset(&mut self) -> Result<u64> {
+        let mut ofs = 0;
+        loop {
+            let byte = self.data.get_u8();
+            ofs = (ofs << 7) | byte as u64;
+            if (byte >> 7) & 1 == 0 {
+                return Ok(ofs);
+            }
+
+            ofs += 1;
+        }
+    }
 }
 
 fn parse_delta_size(data: &mut bytes::Bytes) -> Result<u64> {
@@ -184,17 +213,12 @@ fn parse_delta(data: &mut bytes::Bytes) -> Result<Vec<DeltaInstruction>> {
     while !data.is_empty() {
         let initial = data.get_u8();
         anyhow::ensure!(initial != 0, "0 instruction is reserved");
-        println!("Lead: {initial} - {initial:08b}");
 
         let mut size: usize = 0;
         let mut offset: usize = 0;
 
         if initial & 0b1000_0000 == 0 {
             // Data instruction
-            println!(
-                "Insert -- Inserting {initial} bytes, got {} left",
-                data.len()
-            );
             instructions.push(DeltaInstruction::Data {
                 data: data.split_to(initial as usize),
             });
@@ -224,7 +248,7 @@ fn parse_delta(data: &mut bytes::Bytes) -> Result<Vec<DeltaInstruction>> {
                 let byte = data.get_u8();
                 size |= (byte as usize) << 8;
             }
-            if (initial & 6) == 1 {
+            if (initial >> 6) & 1 == 1 {
                 let byte = data.get_u8();
                 size |= (byte as usize) << 16;
             }
@@ -233,14 +257,9 @@ fn parse_delta(data: &mut bytes::Bytes) -> Result<Vec<DeltaInstruction>> {
                 size = 0x10000;
             }
 
-            println!("Copy -- Size: {size} Offset: {offset}");
             instructions.push(DeltaInstruction::Copy { offset, size });
         }
     }
-    for instruction in &instructions {
-        println!("{instruction:?}");
-    }
-    println!();
 
     Ok(instructions)
 }
@@ -250,8 +269,6 @@ fn apply_deltas(base: &[u8], instructions: Vec<DeltaInstruction>) -> Result<Vec<
     for instruction in instructions.into_iter() {
         match instruction {
             DeltaInstruction::Copy { offset, size } => {
-                dbg!(base.len());
-                dbg!(offset, size);
                 result.extend_from_slice(&base[offset as usize..offset as usize + size as usize])
             }
             DeltaInstruction::Data { data } => {

@@ -24,6 +24,7 @@ pub(crate) async fn invoke(url: String, dst: Option<String>) -> Result<()> {
     let packs = fetch_refs(&url, advertised).await?;
     for mut pack in packs {
         pack.parse()?;
+        break;
     }
 
     Ok(())
@@ -47,12 +48,12 @@ async fn fetch_refs(url: &str, advertised: Vec<String>) -> Result<Vec<PackFile>>
     let packs = Arc::new(Mutex::new(Vec::new()));
     let mut handles = vec![];
 
+    println!("Downloading packs...");
     for reference in want.into_iter() {
         let url = url.clone();
         let packs = Arc::clone(&packs);
 
         let hdl: JoinHandle<Result<()>> = spawn(async move {
-            println!("Parsing pack: {reference}");
             let client = Client::new();
             let mut data = String::new();
             let line = format!("want {}\n", reference);
@@ -75,7 +76,7 @@ async fn fetch_refs(url: &str, advertised: Vec<String>) -> Result<Vec<PackFile>>
 
             let mut packs = packs.lock().await;
             let _ = packfile.split_to(8);
-            packs.push(PackFile::new(packfile));
+            packs.push(PackFile::new(&reference, packfile));
 
             Ok(())
         });

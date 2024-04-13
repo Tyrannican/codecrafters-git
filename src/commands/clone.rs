@@ -4,6 +4,9 @@ use reqwest::StatusCode;
 use std::collections::HashSet;
 use std::fmt::Write;
 use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::task::{spawn, JoinHandle};
 
 use crate::pack::PackFile;
 
@@ -41,32 +44,53 @@ async fn create_destination(dst: impl AsRef<Path>) -> Result<()> {
 async fn fetch_refs(url: &str, advertised: Vec<String>, client: &Client) -> Result<Vec<PackFile>> {
     let url = format!("{url}/git-upload-pack");
     let want: HashSet<String> = advertised.into_iter().collect();
+    let packs = Arc::new(Mutex::new(Vec::new()));
+    let mut handles = vec![];
 
-    let mut packs = Vec::new();
-    for reference in want.iter() {
-        println!("Parsing pack: {reference}");
-        let mut data = String::new();
-        let line = format!("want {}\n", reference);
-        let size = (line.len() as u16 + 4).to_be_bytes();
-        let line = format!("{}{}", hex::encode(size), line);
-        write!(data, "{line}")?;
-        write!(data, "0000")?;
-        writeln!(data, "0009done")?;
+    for reference in want.into_iter() {
+        let packs = packs.clone();
+        let url = url.clone();
+        let client = client.clone();
+        let hdl: JoinHandle<Result<()>> = spawn(async move {
+            println!("Parsing pack: {reference}");
+            let mut data = String::new();
+            let line = format!("want {}\n", reference);
+            let size = (line.len() as u16 + 4).to_be_bytes();
+            let line = format!("{}{}", hex::encode(size), line);
+            write!(data, "{line}")?;
+            write!(data, "0000")?;
+            writeln!(data, "0009done")?;
 
-        let body = data.as_bytes().to_owned();
-        let mut packfile = client
-            .post(&url)
-            .header("Content-Type", "x-git-upload-pack-request")
-            .body(body)
-            .send()
-            .await
-            .context("sending git upload pack request")?
-            .bytes()
-            .await?;
+            let body = data.as_bytes().to_owned();
+            let mut packfile = client
+                .post(&url)
+                .header("Content-Type", "x-git-upload-pack-request")
+                .body(body)
+                .send()
+                .await
+                .context("sending git upload pack request")
+                .expect("should have some data")
+                .bytes()
+                .await
+                .expect("should be able to convert to bytes");
 
-        let _ = packfile.split_to(8);
-        packs.push(PackFile::new(packfile));
+            let mut packs = packs.lock().await;
+            let _ = packfile.split_to(8);
+            packs.push(PackFile::new(packfile));
+
+            Ok(())
+        });
+
+        handles.push(hdl);
     }
+
+    for hdl in handles {
+        let _ = hdl.await.context("awaiting packfile fetch task")?;
+    }
+
+    let packs = Arc::try_unwrap(packs)
+        .expect("cannot extract out packs")
+        .into_inner();
 
     Ok(packs)
 }

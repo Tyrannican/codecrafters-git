@@ -21,7 +21,7 @@ pub(crate) async fn invoke(url: String, dst: Option<String>) -> Result<()> {
     let advertised = ref_discovery(&url, &client)
         .await
         .context("ref discovery")?;
-    let packs = fetch_refs(&url, advertised, &client).await?;
+    let packs = fetch_refs(&url, advertised).await?;
     for mut pack in packs {
         pack.parse()?;
     }
@@ -41,18 +41,19 @@ async fn create_destination(dst: impl AsRef<Path>) -> Result<()> {
 }
 
 // This is clone so we have nothing so omitting the have part
-async fn fetch_refs(url: &str, advertised: Vec<String>, client: &Client) -> Result<Vec<PackFile>> {
+async fn fetch_refs(url: &str, advertised: Vec<String>) -> Result<Vec<PackFile>> {
     let url = format!("{url}/git-upload-pack");
     let want: HashSet<String> = advertised.into_iter().collect();
     let packs = Arc::new(Mutex::new(Vec::new()));
     let mut handles = vec![];
 
     for reference in want.into_iter() {
-        let packs = packs.clone();
         let url = url.clone();
-        let client = client.clone();
+        let packs = Arc::clone(&packs);
+
         let hdl: JoinHandle<Result<()>> = spawn(async move {
             println!("Parsing pack: {reference}");
+            let client = Client::new();
             let mut data = String::new();
             let line = format!("want {}\n", reference);
             let size = (line.len() as u16 + 4).to_be_bytes();
@@ -63,16 +64,14 @@ async fn fetch_refs(url: &str, advertised: Vec<String>, client: &Client) -> Resu
 
             let body = data.as_bytes().to_owned();
             let mut packfile = client
-                .post(&url)
+                .post(url)
                 .header("Content-Type", "x-git-upload-pack-request")
                 .body(body)
                 .send()
                 .await
-                .context("sending git upload pack request")
-                .expect("should have some data")
+                .context("sending git upload pack request")?
                 .bytes()
-                .await
-                .expect("should be able to convert to bytes");
+                .await?;
 
             let mut packs = packs.lock().await;
             let _ = packfile.split_to(8);

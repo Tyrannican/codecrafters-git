@@ -23,8 +23,8 @@ pub(crate) async fn invoke(url: String, dst: Option<String>) -> Result<()> {
         .context("ref discovery")?;
     let packs = fetch_refs(&url, advertised).await?;
     for mut pack in packs {
-        pack.parse()?;
-        break;
+        pack.parse()
+            .with_context(|| format!("parsing pack {}", pack.id))?;
     }
 
     Ok(())
@@ -76,7 +76,8 @@ async fn fetch_refs(url: &str, advertised: Vec<String>) -> Result<Vec<PackFile>>
 
             let mut packs = packs.lock().await;
             let _ = packfile.split_to(8);
-            packs.push(PackFile::new(&reference, packfile));
+            let packfile = PackFile::new(&reference, packfile).context("building packfile")?;
+            packs.push(packfile);
 
             Ok(())
         });

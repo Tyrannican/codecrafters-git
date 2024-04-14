@@ -178,6 +178,7 @@ pub(crate) enum GitObjectType {
     Blob,
     Tree,
     Commit,
+    Tag,
 }
 
 impl From<&str> for GitObjectType {
@@ -186,6 +187,7 @@ impl From<&str> for GitObjectType {
             "blob" => Self::Blob,
             "tree" => Self::Tree,
             "commit" => Self::Commit,
+            "tag" => Self::Tag,
             _ => Self::default(),
         }
     }
@@ -197,6 +199,7 @@ impl Into<String> for GitObjectType {
             Self::Blob => "blob".to_string(),
             Self::Tree => "tree".to_string(),
             Self::Commit => "commit".to_string(),
+            Self::Tag => "tag".to_string(),
         }
     }
 }
@@ -207,6 +210,7 @@ impl std::fmt::Display for GitObjectType {
             Self::Blob => write!(f, "blob"),
             Self::Tree => write!(f, "tree"),
             Self::Commit => write!(f, "commit"),
+            Self::Tag => write!(f, "tag"),
         }
     }
 }

@@ -1,8 +1,9 @@
-use std::io::{Cursor, Read, Seek};
+use std::io::{Cursor, Read};
 
 use anyhow::{Context, Result};
 use bytes::{Buf, Bytes};
 use flate2::read::ZlibDecoder;
+use sha1::{Digest, Sha1};
 
 use crate::object::{GitObject, GitObjectType};
 
@@ -51,26 +52,30 @@ pub(crate) struct PackFile {
 }
 
 impl PackFile {
-    pub(crate) fn new(id: &str, content: Bytes) -> Self {
-        Self {
+    pub(crate) fn new(id: &str, mut content: Bytes) -> Result<Self> {
+        let raw_content = content.split_to(content.len() - 20);
+        let checksum = hex::encode(&content);
+        Self::verify_checksum(&raw_content, &checksum).context("verify pack checksum")?;
+
+        Ok(Self {
             id: id.to_string(),
             header: PackHeader::default(),
-            content: Cursor::new(content),
-        }
+            content: Cursor::new(raw_content),
+        })
     }
 
     pub(crate) fn parse(&mut self) -> Result<()> {
-        println!("Parsing pack: {}", self.id);
         self.validate_pack_header()
             .context("packfile header validation")?;
 
         let mut parsed_objects = 0;
         while self.content.has_remaining() {
             let (object_type, size) = self.get_object_type_and_size();
-            println!("Got {object_type:?} with size: {size}");
 
             match object_type {
-                PackFileObject::RefDelta => self.ref_delta().context("parsing ref delta object")?,
+                PackFileObject::RefDelta => {
+                    self.ref_delta(size).context("parsing ref delta object")?
+                }
                 PackFileObject::OffsetDelta => {
                     self.ofs_delta().context("parsing ofs delta object")?
                 }
@@ -103,9 +108,13 @@ impl PackFile {
     }
 
     fn get_object_type_and_size(&mut self) -> (PackFileObject, usize) {
-        let byte = self.content.get_u8();
-        let o_type = PackFileObject::from((byte & 0b0111_0000) >> 4);
-        let mut size = (byte & 0b0000_1111) as usize;
+        let lead = self.content.get_u8();
+        let o_type = PackFileObject::from((lead & 0b0111_0000) >> 4);
+        let mut size = (lead & 0b0000_1111) as usize;
+
+        if (lead >> 7) & 1 == 0 {
+            return (o_type, size);
+        }
 
         let mut ofs = 0;
         loop {
@@ -121,12 +130,12 @@ impl PackFile {
         (o_type, size)
     }
 
-    fn ref_delta(&mut self) -> Result<()> {
+    fn ref_delta(&mut self, expected_size: usize) -> Result<()> {
         let mut buf = Vec::with_capacity(20);
-        // NOTE: read_exact doesn't move the cursor, who knew?
         for _ in 0..20 {
             buf.push(self.content.get_u8());
         }
+
         let base_name = hex::encode(&buf);
 
         let mut delta = Vec::new();
@@ -135,7 +144,9 @@ impl PackFile {
             .read_to_end(&mut delta)
             .context("decompressing ref delta data")?;
 
+        anyhow::ensure!(decoder.total_out() == expected_size as u64);
         self.content.advance(decoder.total_in() as usize);
+
         let mut delta = Bytes::from(delta);
         let _base_size = delta_size(&mut delta);
         let _reconstructed_size = delta_size(&mut delta);
@@ -157,7 +168,7 @@ impl PackFile {
     fn ofs_delta(&mut self) -> Result<()> {
         let ofs = self.get_ofs_delta_offset()?;
         let current_position = self.content.position();
-        self.content.seek(std::io::SeekFrom::Start(ofs))?;
+        self.content.set_position(current_position - ofs);
 
         let mut content = Vec::new();
         let mut decoder = ZlibDecoder::new(self.content.clone());
@@ -165,8 +176,7 @@ impl PackFile {
             .read_to_end(&mut content)
             .context("decompressing offset delta stream")?;
 
-        self.content
-            .seek(std::io::SeekFrom::Start(current_position))?;
+        self.content.set_position(current_position);
 
         // TODO: Determine correct object type
 
@@ -187,10 +197,13 @@ impl PackFile {
             PackFileObject::Blob => GitObject::create_raw(&content, GitObjectType::Blob)?,
             PackFileObject::Commit => GitObject::create_raw(&content, GitObjectType::Commit)?,
             PackFileObject::Tree => GitObject::create_raw(&content, GitObjectType::Tree)?,
+            PackFileObject::Tag => GitObject::create_raw(&content, GitObjectType::Tag)?,
             _ => unimplemented!("unknown type {object_type:?}"),
         };
 
-        object.write().context("writing object from packfile")?;
+        object
+            .write()
+            .with_context(|| format!("writing object {} from pack", object.hash))?;
 
         Ok(())
     }
@@ -206,6 +219,16 @@ impl PackFile {
 
             ofs += 1;
         }
+    }
+
+    fn verify_checksum(content: &Bytes, checksum: &str) -> Result<()> {
+        let mut encoder = Sha1::new();
+        encoder.update(&content);
+        let check = encoder.finalize();
+        let check = hex::encode(check);
+        anyhow::ensure!(&check == checksum);
+
+        Ok(())
     }
 }
 

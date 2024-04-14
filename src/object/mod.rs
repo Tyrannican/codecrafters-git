@@ -161,7 +161,8 @@ impl GitObject {
         let compressed = compress(&self.content[..]).context("attempting to compress data")?;
         let path = create_filepath(&self.hash)?;
         let mut f = if std::path::PathBuf::from(&path).exists() {
-            std::fs::File::open(&path).with_context(|| format!("opening {path} to write object"))?
+            // This file is the same, no reason to write again
+            return Ok(());
         } else {
             std::fs::File::create(&path).context("creating file to write object")?
         };

@@ -10,6 +10,8 @@ use tokio::task::{spawn, JoinHandle};
 
 use crate::pack::PackFile;
 
+// TODO: Rebuild the repo from the ref objects
+// TODO: Focus only on `main` for now
 pub(crate) async fn invoke(url: String, dst: Option<String>) -> Result<()> {
     if let Some(dst) = dst {
         create_destination(dst)

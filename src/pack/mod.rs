@@ -123,11 +123,9 @@ impl PackFile {
             ofs += 1;
 
             if (byte >> 7) & 1 == 0 {
-                break;
+                return (o_type, size);
             }
         }
-
-        (o_type, size)
     }
 
     fn ref_delta(&mut self, expected_size: usize) -> Result<()> {
@@ -253,6 +251,7 @@ fn delta_size(delta: &mut Bytes) -> u64 {
 fn delta_instructions(mut delta: Bytes) -> Vec<DeltaInstruction> {
     let mut instructions = Vec::new();
 
+    // TODO: Cleanup
     while !delta.is_empty() {
         let lead = delta.get_u8();
 

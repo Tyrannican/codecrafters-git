@@ -103,21 +103,19 @@ impl PackFile {
     }
 
     fn get_object_type_and_size(&mut self) -> (PackFileObject, usize) {
-        let mut size = 0;
         let byte = self.content.get_u8();
         let o_type = PackFileObject::from((byte & 0b0111_0000) >> 4);
-        size |= (byte & 0b0000_1111) as usize;
+        let mut size = (byte & 0b0000_1111) as usize;
 
-        let mut idx = 0;
+        let mut ofs = 0;
         loop {
             let byte = self.content.get_u8();
-            size |= ((byte & 0b0111_1111) as usize) << (7 * idx + 4);
+            size |= ((byte & 0b0111_1111) as usize) << (7 * ofs + 4);
+            ofs += 1;
 
             if (byte >> 7) & 1 == 0 {
                 break;
             }
-
-            idx += 1;
         }
 
         (o_type, size)
@@ -125,7 +123,10 @@ impl PackFile {
 
     fn ref_delta(&mut self) -> Result<()> {
         let mut buf = Vec::with_capacity(20);
-        self.content.read_exact(&mut buf)?;
+        // NOTE: read_exact doesn't move the cursor, who knew?
+        for _ in 0..20 {
+            buf.push(self.content.get_u8());
+        }
         let base_name = hex::encode(&buf);
 
         let mut delta = Vec::new();

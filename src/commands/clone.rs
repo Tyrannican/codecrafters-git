@@ -2,12 +2,20 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use reqwest::StatusCode;
 use std::collections::HashSet;
+use std::ffi::CStr;
 use std::fmt::Write;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::Read;
+use std::io::Write as FileWrite;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::{spawn, JoinHandle};
 
+use crate::object::GitObject;
+use crate::object::GitObjectType;
 use crate::pack::PackFile;
 
 // TODO: Rebuild the repo from the ref objects
@@ -20,7 +28,7 @@ pub(crate) async fn invoke(url: String, dst: Option<String>) -> Result<()> {
     }
 
     let client = Client::new();
-    let advertised = ref_discovery(&url, &client)
+    let (head, advertised) = ref_discovery(&url, &client)
         .await
         .context("ref discovery")?;
     let packs = fetch_refs(&url, advertised).await?;
@@ -28,6 +36,8 @@ pub(crate) async fn invoke(url: String, dst: Option<String>) -> Result<()> {
         pack.parse()
             .with_context(|| format!("parsing pack {}", pack.id))?;
     }
+
+    populate_repository(head).context("rebuilding repo from HEAD")?;
 
     Ok(())
 }
@@ -98,7 +108,7 @@ async fn fetch_refs(url: &str, advertised: Vec<String>) -> Result<Vec<PackFile>>
     Ok(packs)
 }
 
-async fn ref_discovery(url: &str, client: &Client) -> Result<Vec<String>> {
+async fn ref_discovery(url: &str, client: &Client) -> Result<(String, Vec<String>)> {
     println!("Performing ref discovery for {url}");
     let url = format!("{url}/info/refs");
     let response = client
@@ -121,11 +131,11 @@ async fn ref_discovery(url: &str, client: &Client) -> Result<Vec<String>> {
     let mut discovered = Vec::new();
     let refs = &refs[1..];
     let head = &refs[0];
-    let Some((head, _)) = head[8..].split_once(' ') else {
+    let Some((head, rest)) = head[8..].split_once(' ') else {
         anyhow::bail!("this is not a reference");
     };
 
-    discovered.push(head.to_owned());
+    anyhow::ensure!(rest.contains("HEAD"));
     for reference in refs[1..].into_iter() {
         // Encountered magic num, we're done
         if reference == "0000" {
@@ -139,7 +149,7 @@ async fn ref_discovery(url: &str, client: &Client) -> Result<Vec<String>> {
         discovered.push(reference.to_owned());
     }
 
-    Ok(discovered)
+    Ok((head.to_string(), discovered))
 }
 
 fn validate_ref_header(header: &str, status: StatusCode) -> Result<()> {
@@ -155,5 +165,66 @@ fn validate_ref_header(header: &str, status: StatusCode) -> Result<()> {
         anyhow::bail!("failed regex validation");
     }
 
+    Ok(())
+}
+
+fn populate_repository(head: String) -> Result<()> {
+    let head = GitObject::load(&head).context("opening HEAD")?;
+    let mut reader = BufReader::new(&head.content[..]);
+    let mut content = String::new();
+    reader.read_to_string(&mut content)?;
+
+    let Some((tree, _)) = content.split_once('\n') else {
+        anyhow::bail!("this is not the correct format...");
+    };
+
+    let Some((_, tree_hash)) = tree.split_once(' ') else {
+        anyhow::bail!("expected to find a hash");
+    };
+
+    let root = std::env::current_dir()?;
+    build_tree(&tree_hash, &root)?;
+
+    Ok(())
+}
+
+fn build_tree(hash: &str, root: &PathBuf) -> Result<()> {
+    let tree = GitObject::load(&hash).context("loading tree")?;
+    let mut buf = BufReader::new(&tree.content[..]);
+
+    loop {
+        let mut name_buf = Vec::new();
+        let mut hash_buf: [u8; 20] = [0; 20];
+
+        buf.read_until(0, &mut name_buf)
+            .context("reading tree file content")?;
+        if name_buf.is_empty() {
+            break;
+        }
+        buf.read_exact(&mut hash_buf)
+            .context("reading tree file hash")?;
+
+        let hash = hex::encode(hash_buf);
+
+        let file_info =
+            CStr::from_bytes_until_nul(&name_buf).context("converting file info to c_str")?;
+        let file_info = file_info.to_str().context("converting c_str to str")?;
+
+        let Some((_, name)) = file_info.split_once(' ') else {
+            anyhow::bail!(format!("missing file mode and context: {file_info}"));
+        };
+
+        let path = root.join(name);
+        let obj = GitObject::load(&hash).context("loading object in tree")?;
+        if obj.obj_type == GitObjectType::Blob {
+            let mut f = std::fs::File::create(&path)?;
+            f.write_all(&obj.content)?;
+        } else if obj.obj_type == GitObjectType::Tree {
+            std::fs::create_dir_all(&path)?;
+            build_tree(&hash, &path)?;
+        }
+
+        name_buf.clear();
+    }
     Ok(())
 }

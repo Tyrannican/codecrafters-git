@@ -39,5 +39,6 @@ pub(crate) fn invoke(tree_hash: &str, name_only: bool) -> Result<()> {
         }
         name_buf.clear();
     }
+
     Ok(())
 }

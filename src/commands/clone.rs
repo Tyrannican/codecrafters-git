@@ -1,16 +1,14 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
 use reqwest::StatusCode;
-use std::collections::HashSet;
-use std::ffi::CStr;
-use std::fmt::Write;
-use std::io::BufRead;
-use std::io::BufReader;
-use std::io::Read;
-use std::io::Write as FileWrite;
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::Arc;
+
+use std::{
+    ffi::CStr,
+    fmt::Write,
+    io::{BufRead, BufReader, Read, Write as FileWrite},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::sync::Mutex;
 use tokio::task::{spawn, JoinHandle};
 
@@ -37,7 +35,7 @@ pub(crate) async fn invoke(url: String, dst: Option<String>) -> Result<()> {
             .with_context(|| format!("parsing pack {}", pack.id))?;
     }
 
-    populate_repository(head).context("rebuilding repo from HEAD")?;
+    build_repository(head).context("rebuilding repo from HEAD")?;
 
     Ok(())
 }
@@ -56,12 +54,11 @@ async fn create_destination(dst: impl AsRef<Path>) -> Result<()> {
 // This is clone so we have nothing so omitting the have part
 async fn fetch_refs(url: &str, advertised: Vec<String>) -> Result<Vec<PackFile>> {
     let url = format!("{url}/git-upload-pack");
-    let want: HashSet<String> = advertised.into_iter().collect();
     let packs = Arc::new(Mutex::new(Vec::new()));
     let mut handles = vec![];
 
     println!("Downloading packs...");
-    for reference in want.into_iter() {
+    for reference in advertised.into_iter() {
         let url = url.clone();
         let packs = Arc::clone(&packs);
 
@@ -168,7 +165,7 @@ fn validate_ref_header(header: &str, status: StatusCode) -> Result<()> {
     Ok(())
 }
 
-fn populate_repository(head: String) -> Result<()> {
+fn build_repository(head: String) -> Result<()> {
     let head = GitObject::load(&head).context("opening HEAD")?;
     let mut reader = BufReader::new(&head.content[..]);
     let mut content = String::new();
@@ -226,5 +223,6 @@ fn build_tree(hash: &str, root: &PathBuf) -> Result<()> {
 
         name_buf.clear();
     }
+
     Ok(())
 }
